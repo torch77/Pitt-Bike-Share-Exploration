@@ -1,0 +1,214 @@
+---
+title: "Exploratory Analysis of Initial Pittsburgh Bike Share Data"
+author: "Jackson Whitmore"
+date: "January 28, 2016"
+output: html_document
+---
+
+
+The below analysis provides a quick look at the first data release from Healthy Ride which is operated by Pittsburgh Bike Share. The system was opened at the end of May 2015. This analysis looks at data from the first quarter of the system's operations (May 30 to Sep 30). Further data will be released quarterly.
+
+```{r, echo=FALSE, warning=FALSE, message = FALSE}
+library(plyr)
+library(ggplot2)
+library(ggmap)
+library(knitr)
+library(lubridate)
+
+#read in data
+trips <- read.csv("trips_Q3_2015.csv", na.strings = "", stringsAsFactors = FALSE)
+stations <- read.csv("Stations_2015.csv", na.strings = "", stringsAsFactors = FALSE)
+
+#convert times into lubridate objs
+trips$LubStartTime <- force_tz(mdy_hm(trips$StartTime), tzone = "America/New_York")
+trips$LubEndTime <- force_tz(mdy_hm(trips$StopTime), tzone = "America/New_York")
+
+###thought durations were all messed up but they weren't
+###can keep as lubridate objecst to work with
+trips$duration_min <- trips$TripDuration/60
+# trips$interval <- interval(trips$LubStartTime, trips$LubEndTime, tzone = "America/New_York")
+# trips$Lub_duration <- as.duration(trips$interval)/dminutes(1)
+trips$Lub_start_day <- wday(trips$LubStartTime, label = TRUE, abbr = TRUE)
+#use format to pull out just the date info
+trips$LubStartDate <- format(trips$LubStartTime, "%Y/%m/%d")
+trips$LubEndDate <- format(trips$LubEndTime, "%Y/%m/%d")
+```
+
+```{r, echo=FALSE, warning=FALSE, message = FALSE}
+#cast usertypes as factors
+trips$UserType <- as.factor(trips$UserType)
+#count trips by each rider type
+total_trips <- length(unique(trips$TripId))
+cust_trips <- length(unique(trips[which(trips$UserType == "Customer"), ]$TripId))
+daily_trips <- length(unique(trips[which(trips$UserType == "Daily"), ]$TripId))
+sub_trips <- length(unique(trips[which(trips$UserType == "Subscriber"), ]$TripId))
+na_trips <- length(unique(trips[which(is.na(trips$UserType)), ]$TripId))
+#create df for plotting
+trip_df <- data.frame(category = c("Daily", "Customer", "Subscriber", "NA"), trips = c(daily_trips, cust_trips, sub_trips, na_trips))
+#order levels by trip #
+trip_df$category <- with(trip_df, reorder(category, trips, mean))
+
+```
+
+##System Overview: 
+A quick look at the data shows us that `r formatC(total_trips, big.mark=",", format = "d")` trips were taken from `r min(trips$LubStartDate)` to `r max(trips$LubStartDate)`. These trips were broken down into the following categories: `r levels(trips$UserType)`.
+
+The total number of trips made by each user category over the course of the time period are depicted in the chart below. 
+
+```{r, echo=FALSE, fig.width=6, fig.height=6, dpi=100, fig.align='center', warning=FALSE, message = FALSE}
+#plot
+trip_df_gg <- ggplot(data = trip_df, mapping = aes(y = trips, x = category))
+trip_df_gg + geom_bar(stat = "identity", fill = "darkred") + labs(x = "Rider Category", y ="Total Trips", title ="Trips by Rider Category in Q3 2015")
+```
+
+As we can see, almost all trips were made using either a subscriber or customer pass. After a quick look at the Healthy Ride website it appears that customer passes represent pay as you go riders. Subscriber passes represent those users who have purchased a recurring plan which allows for unlimited 30 or 60 minute trips, depending on the plan. 
+
+Daily passes were hardly used with only `r formatC(daily_trips, big.mark=",", format = "d") ` rides taken. Interestingly, there does not appear to be a corresponding category for these passes on the Healthy Ride website. A quick check of the hypothesis that they may have been a promotional pass offered during the opening of the system is quickly discredited since the passes were used from `r min(subset(trips, subset = UserType == "Daily")$LubStartDate)` to `r max(subset(trips, subset = UserType == "Daily")$LubStartDate)`. It would be interesting to find out exactly what these trips represent. 
+
+Finally, there were some records which, for whatever reason, did not have a user type recorded. 
+
+###Temporal Aspects of Trips
+As bike share programs are becoming more and more popular across the country, urban policy analysts and planners are attempting to identify their effect on the movement of people in and around cities. While a full analysis into the usage patterns of Healthy Rider users is beyond the scope of this document, a few quick plots can help us get a feel for how the system was used during its first few months in existence. 
+
+The below histograms depict the total number of trips taken by trip duration in 10 minute increments for each user type. Given the extremely small number of daily pass users, they were dropped from the analysis along with trips with no user type. Furthermore, trips over 500 minutes long were eliminated as they do no represent the riding patterns of the vast majority of users
+
+```{r, echo=FALSE, fig.width=6, fig.height=4, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+#look at trip duration by rider type
+#drop daily riders
+trips_gg <- ggplot(data = subset(trips, subset = UserType != "Daily")) 
+trips_gg + geom_histogram(mapping = aes(x = duration_min, fill = UserType), alpha = .8, binwidth = 10) + facet_wrap("UserType") + xlim(0, 500) + labs(x = "Trip Duration (Min)", y = "Total Trips", title = "Trip Duration by User Type") + scale_fill_brewer(palette = "Set1")
+```
+It's immediately evident that riders making use of a subscription pass take many more short trips than those making use of a pay as you go pass. This intuitively makes sense because these customers are only charged for trips over 30 or 60 minutes. Essentially, they are reducing their overall cost per trip with each additional trip they make within their limit. Additionally, we would expect someone signing up for a subscription to anticipate using the the pass repeteadly, most likely for short trips such as a leg of their commute or to complete an errand.
+
+However, these numbers are aggregated over months so let's take a look at them for each day of the week. 
+
+```{r, echo=FALSE, fig.width=6, fig.height=4, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+##look at trip duration by day
+trips_gg + geom_histogram(mapping = aes(x = duration_min, fill = UserType), alpha = .8, binwidth = 10) + facet_wrap("Lub_start_day") + xlim(0,500) + labs(x = "Trip Duration (Min)", y = "Total Trips", title = "Trip Duration by User Type and Day of the Week") + scale_fill_brewer(palette = "Set1")
+```
+It's interesting to note that, in the aggregate, it appears that the number of subscription pass holders using the system for short trips remains relatively stable. There is a subtle increase in the number of very short trips being made by these users in the second half of the work week. Overall, this fits with our hypothesis that these riders planned on frequently using the system.
+
+Riders with a customer pass see a large increase in trips made across all durations on Saturday and Sunday. Again, this makes sense as these users are most likely making use of the system for "leisure" rides which they might not make during the work week. 
+
+Let's drill down some more and see how total system usage varied not just by day but by time of day as well. 
+
+```{r, echo=FALSE, fig.width=6, fig.height=4, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+###look at weekday usage by user type and by time (hour)
+#three way contingency table
+user_weekday_hour <- as.data.frame(with(trips, table(UserType, Lub_start_day, hour(LubStartTime))))
+colnames(user_weekday_hour) <- c("category", "weekday", "start_hour", "trips")
+
+#calculate all trips by user type, date, and hour
+user_weekday_hour_ttrips <- ddply(trips, .(UserType, LubStartDate, hour(LubStartTime)), summarize, no_trips = length(TripId))
+colnames(user_weekday_hour_ttrips) <- c("category", "date", "start_hour", "trips")
+#calculate average trips by user type, day of week, and hour
+#use ymd on date to cast as lub obj so we can pull out weekday
+user_weekday_hour_avgtrips <- ddply(user_weekday_hour_ttrips, .(category, wday(ymd(date), abbr = T, label = T), start_hour), summarize, no_trips = mean(trips))
+colnames(user_weekday_hour_avgtrips) <- c("category", "weekday", "start_hour", "avg_trips")
+
+#drop dailies
+users_gg <- ggplot(data=subset(user_weekday_hour_avgtrips, category != "Daily"))
+#plot
+users_gg + geom_bar(mapping = aes(y = avg_trips, x = start_hour, fill = category), alpha = .8, stat = "identity", position = "dodge") + facet_wrap("weekday", drop = FALSE, scales = "free_x") + labs(x = "Hour of Trip Start", y = "Avg. Trips", title = "Avg. Number of Trips by User Type and Time of Day") + scale_fill_brewer(palette = "Set1")
+```
+
+The above chart shows average (mean) trips throughout the system by time of day for each day of the week. We can see that users of the customer pass mostly use the bikes on weekend afternoons while those with subscriper passes maintain a more consistent level of usage throughout the week. This fits with our previous hypotheses about how each type of 
+pass holder utilizes the system. Interestingly, we see a spike in subscriber pass usage at the end of the workday indicating that for these users the bike share is favored more as a means of transportation after work than before. 
+
+Now that we have a general fell for the temporal characteristics of the system, let's take a look at how it is used spatially.
+
+###Spatial Aspects of Trips
+To start, let's take a look at how the system's capacity is distributed throughout Pittsburgh.
+
+```{r, echo=FALSE, fig.width=6, fig.height=4, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+#####mapping
+#get background map from google
+bike_share_center <- c(lon = -79.968000, lat = 40.444879)
+pitt_background <- get_map(location = bike_share_center, source = "google", maptype = "roadmap", crop = FALSE, color = "bw", zoom = 13) 
+
+#station location and capacity
+ggmap(pitt_background) + geom_point(data = stations, mapping = aes(x = Longitude, y = Latitude, size = RackQnty), color = "darkred", alpha = .9)+ labs(title = "Station Bike Capacities", x = "", y = "", size = "Rack Quantity") 
+```
+Unsurprisingly, the system's capacity seems to be centered around downtown Pittsburgh. Complementing the stations downtown are a group of them on the North Shore, including one of the system's largest stations. These were likely positioned to service the Heinz Field and PNC Park as well as the large park and rides on the North Side. 
+
+Of note is how the system exists in a relatively segmented state. Specifically, there are no connecting links of stations between the downtown area, Oakland, and, to a lesser extent, Shadyside. Furthermore, while South Oakland and the University of Pittsburgh are relatively well served by the system there is only one station near the Carnegie Mellon University campus. 
+
+These phenomena may be explained by the fact that the system was partly funded with federal Congestion Mitigation and Air Quality Improvement (CMAQ) funds. Funds distributed by this program are meant to reduce congestion and improve air quality via the reduction of car emissions. Thus, the current station siting plan was most likely developed in a manner which emphasized these criteria over system connectivity.  
+
+Let's see how the use of these stations varies by hour for weekdays and weekends.  
+
+```{r, echo=FALSE, fig.width=6, fig.height=6, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+
+##plot mean start trips by station and weekday
+#count number of trips for each start date
+start_station_date <- ddply(trips, c("FromStationId", "LubStartDate"), summarize, notrips = length(TripId))
+start_station_date$Lub_start_day <- wday(start_station_date$LubStartDate, label = T, abbr = T)
+#get mean trips by weekday
+start_station_day<- ddply(start_station_date, c("FromStationId","Lub_start_day"), summarize, avgtrips = mean(notrips))
+#bring in station data
+start_station_day <- merge(start_station_day, stations, by.x = "FromStationId", by.y = "StationNum")
+#plot start station average trips faceted by day
+
+ggmap(pitt_background, base_layer = ggplot(aes(x = Longitude, y = Latitude), data = start_station_day)) + facet_wrap("Lub_start_day") + geom_point(data = start_station_day, mapping = aes(x = Longitude, y = Latitude, size = avgtrips), color = "darkred", alpha = .7) + labs(title = "Avg. Originating Trips per Day", x = "", y = "", size = "Avg. Trips per Day") 
+```
+It appears that the majority of the system's trips originate in the downtown for all days of the week. South Side also shows up as a origination hot spot. These two areas see a higher increase in average trips over the weekend than other areas, such as Shadyside, which remain relatively stable.
+
+
+```{r, echo=FALSE, fig.width=6, fig.height=6, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+####by hour of the day only weekdays
+start_station_date <- ddply(subset(trips, subset = wday(LubStartTime) != 1 & wday(LubStartTime) != 7 ), .(FromStationId, LubStartDate, hour(LubStartTime)), summarize, notrips = length(TripId))
+colnames(start_station_date) <- c("FromStationId", "start_date","hour", "notrips")
+#get mean trips by weekday
+start_station_day<- ddply(start_station_date, .(FromStationId, hour), summarize, avgtrips = mean(notrips))
+#bring in station data
+start_station_day <- merge(start_station_day, stations, by.x = "FromStationId", by.y = "StationNum")
+
+#plot start station average trips faceted by day
+ggmap(pitt_background, base_layer = ggplot(aes(x = Longitude, y = Latitude), data = start_station_day)) + facet_wrap("hour") + geom_point(data = start_station_day, mapping = aes(x = Longitude, y = Latitude, size = avgtrips), color = "darkred", alpha = .7)  + labs(title = "Avg. Originating Trips by Hour For Weekdays", x = "", y = "", size = "Avg. Trips per Hour") 
+```
+Looking at average trips by hour for the work week we can see that system usage starts to pick up in the morning around 7 or 8am and then remains relatively constant throughout the course of the day. Interestingly, there is a large amount of trips trips made late at night in the Downtown and Oakland which may be a result of the large student populations in these areas. Either way, the larger than expected usage levels would likely prove interesting to investigate further. 
+
+```{r, echo=FALSE, fig.width=6, fig.height=6, dpi=100, fig.align='center', warning = FALSE, message = FALSE}
+####by hour of the day only for only weekends
+start_station_date <- ddply(subset(trips, subset = wday(LubStartTime) == 1 | wday(LubStartTime) == 7), .(FromStationId, LubStartDate, hour(LubStartTime)), summarize, notrips = length(TripId))
+colnames(start_station_date) <- c("FromStationId", "start_date","hour", "notrips")
+#get mean trips by weekday
+start_station_day<- ddply(start_station_date, .(FromStationId, hour), summarize, avgtrips = mean(notrips))
+#bring in station data
+start_station_day <- merge(start_station_day, stations, by.x = "FromStationId", by.y = "StationNum")
+
+#plot start station average trips faceted by day
+ggmap(pitt_background, base_layer = ggplot(aes(x = Longitude, y = Latitude), data = start_station_day)) + facet_wrap("hour") + geom_point(data = start_station_day, mapping = aes(x = Longitude, y = Latitude, size = avgtrips), color = "darkred", alpha = .7) + labs(title = "Avg. Originating Trips by Hour For Weekends (Sat/Sun)", x = "", y = "", size = "Avg. Trips per Hour") 
+```
+Quite interestingly, it seems that less trips are made late at night on the weekends relative to the day than are during the week. It is important to note the relativistic nature of this comparision since in absoulte terms many more trips are made during the weekend than on the week. Otherwise, weekend use seems to follow the same spatio-temporal patterns as the week. 
+
+###Final Thoughts
+The system as a whole seems to be used in the way that one would expect it to. For instance, it sees higher weekend usage and the majority of trips are concentrated around major population/job centers such as Oakland and Downtown. However, there are some interesting aspects of the system's current state such as the fact that it is used more frequently by those without a subscription and the high level of late night weekday usage. 
+
+For future analyses, it would be interesting to examine the effect of weather on the system's usage, look into which stations generate trips and which stations terminate them during the peak periods, and as more data is released look into capacity constraints within the system. 
+
+
+
+
+###take aways
+#- weekend has much more usage
+#- more night use and overall
+#- though there'd be a larger difference in the distribution over hours but turns out is mostly just evident that people use it more on the weekend
+#- changes in spatial patterns over hours
+
+##pull in weather data to see how that affects ridership
+##predict effect of weather and/or day on trips
+##predict effect of day + hour on trip
+##look at overall historical usage from september
+##pull out historical trends
+
+##use p value approach for ridership at stations
+
+###next steps
+##average trips by day for the above chart, in what way??
+##color brewer
+##analysis of stations by schools or downtown
+##group stations into nhoods?
+##identify most popular stations by time of day, find ppl going to bars or something?
+
+
